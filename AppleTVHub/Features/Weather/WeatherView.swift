@@ -73,7 +73,7 @@ struct WeatherView: View {
             VStack(alignment: .trailing, spacing: 3) {
                 Text(viewModel.errorMessage == nil ? "Auto refresh · ~15 min" : "Retrying · ~2 min")
                     .font(.caption.bold())
-                    .foregroundStyle(viewModel.errorMessage == nil ? .secondary : .orange)
+                    .foregroundStyle(viewModel.errorMessage == nil ? Color.gray : Color.orange)
                 if let updated = viewModel.lastUpdated {
                     Text("Updated \(updated.formatted(date: .omitted, time: .shortened))")
                         .font(.caption)
