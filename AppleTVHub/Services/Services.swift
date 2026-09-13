@@ -3,17 +3,22 @@ import Combine
 
 @MainActor
 final class SportsViewModel: ObservableObject {
-    @Published var eventsByLeague: [SportsLeague: [SportsEvent]] = [:]
-    @Published var isLoading = false
-    @Published var errorMessage: String?
-    @Published var lastUpdated: Date?
+    @Published private(set) var eventsByLeague: [SportsLeague: [SportsEvent]] = [:]
+    @Published private(set) var loadingLeagues: Set<SportsLeague> = []
+    @Published private(set) var errorByLeague: [SportsLeague: String] = [:]
+    @Published private(set) var lastUpdatedByLeague: [SportsLeague: Date] = [:]
+    @Published private(set) var isInitialLoading = false
 
-    func refresh() async {
-        isLoading = true
-        errorMessage = nil
+    var hasAnyData: Bool { !eventsByLeague.isEmpty }
+
+    func refreshAll() async {
+        guard !isInitialLoading else { return }
+        isInitialLoading = true
 
         await withTaskGroup(of: (SportsLeague, Result<[SportsEvent], Error>).self) { group in
             for league in SportsLeague.allCases {
+                guard !loadingLeagues.contains(league) else { continue }
+                loadingLeagues.insert(league)
                 group.addTask {
                     do {
                         return (league, .success(try await SportsService.fetchScoreboard(for: league)))
@@ -23,23 +28,83 @@ final class SportsViewModel: ObservableObject {
                 }
             }
 
-            var failures: [String] = []
             for await (league, result) in group {
-                switch result {
-                case .success(let events):
-                    eventsByLeague[league] = events
-                case .failure(let error):
-                    failures.append("\(league.rawValue): \(error.localizedDescription)")
-                }
-            }
-
-            if !failures.isEmpty {
-                errorMessage = failures.joined(separator: " • ")
+                loadingLeagues.remove(league)
+                apply(result, to: league)
             }
         }
 
-        lastUpdated = Date()
-        isLoading = false
+        isInitialLoading = false
+    }
+
+    func refresh(_ league: SportsLeague, force: Bool = false) async {
+        guard !loadingLeagues.contains(league) else { return }
+
+        if !force,
+           let lastUpdated = lastUpdatedByLeague[league],
+           Date().timeIntervalSince(lastUpdated) < minimumRefreshSpacing(for: league) {
+            return
+        }
+
+        loadingLeagues.insert(league)
+        defer { loadingLeagues.remove(league) }
+
+        do {
+            let events = try await SportsService.fetchScoreboard(for: league)
+            apply(.success(events), to: league)
+        } catch {
+            apply(.failure(error), to: league)
+        }
+    }
+
+    func recommendedRefreshInterval(for league: SportsLeague) -> TimeInterval {
+        let events = eventsByLeague[league] ?? []
+        let now = Date()
+
+        if events.contains(where: { $0.isLive }) {
+            return 20
+        }
+
+        let futureStarts = events.compactMap(\.startDate).filter { $0 > now }
+        if let nextStart = futureStarts.min() {
+            let seconds = nextStart.timeIntervalSince(now)
+            if seconds <= 15 * 60 { return 60 }
+            if seconds <= 3 * 60 * 60 { return 120 }
+            if seconds <= 24 * 60 * 60 { return 300 }
+        }
+
+        if events.contains(where: { !$0.isFinal }) {
+            return 300
+        }
+
+        return 900
+    }
+
+    func refreshDescription(for league: SportsLeague) -> String {
+        let seconds = recommendedRefreshInterval(for: league)
+        switch seconds {
+        case ...20: return "Live · ~20 sec"
+        case ...60: return "Starting soon · ~1 min"
+        case ...120: return "Upcoming · ~2 min"
+        case ...300: return "Scheduled · ~5 min"
+        default: return "Idle · ~15 min"
+        }
+    }
+
+    private func minimumRefreshSpacing(for league: SportsLeague) -> TimeInterval {
+        min(recommendedRefreshInterval(for: league) * 0.75, 15)
+    }
+
+    private func apply(_ result: Result<[SportsEvent], Error>, to league: SportsLeague) {
+        switch result {
+        case .success(let events):
+            eventsByLeague[league] = events
+            errorByLeague[league] = nil
+            lastUpdatedByLeague[league] = Date()
+        case .failure(let error):
+            // Preserve the last successful scoreboard instead of blanking the screen.
+            errorByLeague[league] = error.localizedDescription
+        }
     }
 }
 
@@ -50,43 +115,84 @@ enum SportsService {
         }
 
         var request = URLRequest(url: url)
-        request.timeoutInterval = 15
-        request.cachePolicy = .reloadRevalidatingCacheData
+        request.timeoutInterval = 12
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
-            throw URLError(.badServerResponse)
+        let data = try await fetchWithOneRetry(request)
+        return try JSONDecoder().decode(ESPNScoreboardResponse.self, from: data).events
+    }
+
+    private static func fetchWithOneRetry(_ request: URLRequest) async throws -> Data {
+        var finalError: Error = URLError(.unknown)
+
+        for attempt in 0..<2 {
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse else {
+                    throw URLError(.badServerResponse)
+                }
+
+                if 200..<300 ~= http.statusCode {
+                    return data
+                }
+
+                if http.statusCode == 429 || http.statusCode >= 500 {
+                    throw URLError(.cannotLoadFromNetwork)
+                }
+
+                throw URLError(.badServerResponse)
+            } catch {
+                finalError = error
+                if attempt == 0 {
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                }
+            }
         }
 
-        return try JSONDecoder().decode(ESPNScoreboardResponse.self, from: data).events
+        throw finalError
     }
 }
 
 @MainActor
 final class WeatherViewModel: ObservableObject {
-    @Published var location = WeatherLocation.presets[0]
-    @Published var weather: OpenMeteoResponse?
-    @Published var isLoading = false
-    @Published var errorMessage: String?
-    @Published var lastUpdated: Date?
+    @Published private(set) var location: WeatherLocation
+    @Published private(set) var weather: OpenMeteoResponse?
+    @Published private(set) var isLoading = false
+    @Published private(set) var errorMessage: String?
+    @Published private(set) var lastUpdated: Date?
 
-    func select(_ newLocation: WeatherLocation) async {
-        location = newLocation
-        await refresh()
+    init() {
+        location = WeatherLocation.savedOrDefault()
     }
 
-    func refresh() async {
+    func select(_ newLocation: WeatherLocation) async {
+        guard newLocation != location else { return }
+        location = newLocation
+        UserDefaults.standard.set(newLocation.id, forKey: "weather.locationID")
+        await refresh(force: true)
+    }
+
+    func refresh(force: Bool = false) async {
+        guard !isLoading else { return }
+
+        if !force,
+           let lastUpdated,
+           Date().timeIntervalSince(lastUpdated) < 10 * 60 {
+            return
+        }
+
         isLoading = true
+        defer { isLoading = false }
         errorMessage = nil
 
         do {
             weather = try await WeatherService.fetchWeather(for: location)
             lastUpdated = Date()
         } catch {
+            // Keep the previous successful forecast visible if a refresh fails.
             errorMessage = error.localizedDescription
         }
-
-        isLoading = false
     }
 }
 
@@ -108,14 +214,26 @@ enum WeatherService {
 
         guard let url = components.url else { throw URLError(.badURL) }
         var request = URLRequest(url: url)
-        request.timeoutInterval = 15
+        request.timeoutInterval = 12
+        request.cachePolicy = .reloadIgnoringLocalCacheData
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
-            throw URLError(.badServerResponse)
+        var finalError: Error = URLError(.unknown)
+        for attempt in 0..<2 {
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+                    throw URLError(.badServerResponse)
+                }
+                return try JSONDecoder().decode(OpenMeteoResponse.self, from: data)
+            } catch {
+                finalError = error
+                if attempt == 0 {
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                }
+            }
         }
 
-        return try JSONDecoder().decode(OpenMeteoResponse.self, from: data)
+        throw finalError
     }
 }
 
