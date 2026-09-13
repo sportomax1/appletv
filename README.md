@@ -64,7 +64,7 @@ open AppleTVHub.xcodeproj
 
 1. Open `AppleTVHub.xcodeproj`.
 2. Select the **AppleTVHub** target/scheme.
-3. Choose an Apple TV Simulator from Xcode's device menu.
+3. Choose an Apple TV Simulator from Xcode's run-destination menu.
 4. Press **⌘R**.
 
 No signing setup is normally required for the simulator.
@@ -77,14 +77,21 @@ On the Apple TV:
 
 1. Make sure the Apple TV and Mac are on the same network.
 2. Open **Settings → Remotes and Devices → Remote App and Devices**.
-3. Leave that screen open.
+3. Leave that screen open while pairing.
 
-On the Mac:
+On the Mac in current Xcode versions:
 
 1. Open Xcode.
-2. Open **Window → Devices and Simulators**.
-3. Select the Apple TV when it appears.
-4. Enter the pairing code shown on the television if requested.
+2. Open **Device Hub** using **Xcode → Open Developer Tool → Device Hub**, or choose **Manage Devices…** from the run-destination menu.
+3. Click **+ → Pair Nearby Device…** if the Apple TV is not already shown.
+4. Select Apple TV and follow the pairing prompts.
+5. Enter the PIN displayed on the television when requested.
+
+Older Xcode releases may expose equivalent controls under **Window → Devices and Simulators**.
+
+**tvOS does not require the separate Developer Mode toggle used by iPhone/iPad.** Pair the Apple TV through Xcode/Device Hub; developer settings become available as needed.
+
+For wireless pairing, Apple currently recommends that the Mac and Apple TV be on the same network and that the network support IPv6.
 
 ### 2. Configure signing
 
@@ -160,6 +167,7 @@ appletv/
 │           ├── PongGameView.swift
 │           ├── SnakeGameView.swift
 │           └── BreakoutGameView.swift
+├── .gitignore
 └── README.md
 ```
 
@@ -172,6 +180,7 @@ The app is intentionally simple and modular:
 - `WeatherViewModel` manages the selected location and Open-Meteo forecast.
 - Each arcade game is isolated in its own SwiftUI view and owns its game loop/state.
 - Networking uses native `URLSession` and `async/await`.
+- Siri Remote game movement uses SwiftUI's native `onMoveCommand`, with `onPlayPauseCommand` for pause/resume.
 - There are no third-party Swift packages and no stored API secrets.
 
 ## Adding another sport
@@ -195,16 +204,17 @@ Add another `WeatherLocation` to `WeatherLocation.presets` in `Models.swift` wit
 1. Create a new SwiftUI game view under `AppleTVHub/Features/Arcade/`.
 2. Add the file to the Xcode project's Sources build phase if it is not already included.
 3. Add another `gameCard(...)` entry in `ArcadeView.swift`.
-4. Prefer `.onMoveCommand` for D-pad/swipe navigation and `.onPlayPauseCommand` for pausing.
+4. Prefer `.onMoveCommand` for D-pad/Siri Remote navigation and `.onPlayPauseCommand` for pausing.
 
 ## Troubleshooting
 
 ### Apple TV does not appear in Xcode
 
 - Confirm the Mac and Apple TV are on the same network.
+- Confirm IPv6 is available on the local network for wireless tvOS pairing.
 - Reopen **Settings → Remotes and Devices → Remote App and Devices** on Apple TV.
-- Reopen Xcode's **Devices and Simulators** window.
-- USB is not normally required for modern Apple TV pairing.
+- Reopen **Device Hub** and try **Pair Nearby Device…**.
+- Restart the Apple TV if pairing discovery remains stuck.
 
 ### Signing error
 
