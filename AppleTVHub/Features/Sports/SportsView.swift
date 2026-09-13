@@ -1,8 +1,13 @@
 import SwiftUI
 
 struct SportsView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel = SportsViewModel()
-    @State private var selectedLeague: SportsLeague = .nfl
+    @AppStorage("sports.selectedLeague") private var selectedLeagueRaw = SportsLeague.nfl.rawValue
+
+    private var selectedLeague: SportsLeague {
+        SportsLeague(rawValue: selectedLeagueRaw) ?? .nfl
+    }
 
     private var events: [SportsEvent] {
         viewModel.eventsByLeague[selectedLeague] ?? []
@@ -17,9 +22,14 @@ struct SportsView: View {
             )
             .ignoresSafeArea()
 
-            VStack(alignment: .leading, spacing: 30) {
+            VStack(alignment: .leading, spacing: 26) {
                 header
                 leaguePicker
+
+                if let error = viewModel.errorByLeague[selectedLeague], !events.isEmpty {
+                    staleDataBanner(error)
+                }
+
                 content
                 Spacer(minLength: 0)
             }
@@ -27,14 +37,22 @@ struct SportsView: View {
             .padding(.vertical, 45)
         }
         .task {
-            if viewModel.lastUpdated == nil {
-                await viewModel.refresh()
+            if !viewModel.hasAnyData {
+                await viewModel.refreshAll()
             }
+        }
+        .task(id: refreshTaskID) {
+            guard scenePhase == .active else { return }
+            await adaptiveRefreshLoop(for: selectedLeague)
         }
     }
 
+    private var refreshTaskID: String {
+        "\(selectedLeague.rawValue)-\(scenePhase == .active ? "active" : "inactive")"
+    }
+
     private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
+        HStack(alignment: .firstTextBaseline, spacing: 20) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("SPORTS")
                     .font(.system(size: 54, weight: .black, design: .rounded))
@@ -45,17 +63,31 @@ struct SportsView: View {
 
             Spacer()
 
-            if let updated = viewModel.lastUpdated {
-                Text("Updated \(updated.formatted(date: .omitted, time: .shortened))")
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(viewModel.refreshDescription(for: selectedLeague))
+                    .font(.caption.bold())
+                    .foregroundStyle(events.contains(where: \.isLive) ? .red : .secondary)
+
+                if let updated = viewModel.lastUpdatedByLeague[selectedLeague] {
+                    Text("Updated \(updated.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Button {
-                Task { await viewModel.refresh() }
+                Task { await viewModel.refresh(selectedLeague, force: true) }
             } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
+                if viewModel.loadingLeagues.contains(selectedLeague) {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("Refreshing")
+                    }
+                } else {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
             }
-            .disabled(viewModel.isLoading)
+            .disabled(viewModel.loadingLeagues.contains(selectedLeague))
         }
     }
 
@@ -63,12 +95,17 @@ struct SportsView: View {
         HStack(spacing: 18) {
             ForEach(SportsLeague.allCases) { league in
                 Button {
-                    selectedLeague = league
+                    selectedLeagueRaw = league.rawValue
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: league.symbol)
                         Text(league.rawValue)
                             .fontWeight(.bold)
+                        if (viewModel.eventsByLeague[league] ?? []).contains(where: \.isLive) {
+                            Circle()
+                                .fill(.red)
+                                .frame(width: 10, height: 10)
+                        }
                     }
                     .frame(minWidth: 150)
                     .padding(.vertical, 8)
@@ -82,7 +119,7 @@ struct SportsView: View {
 
     @ViewBuilder
     private var content: some View {
-        if viewModel.isLoading && viewModel.eventsByLeague.isEmpty {
+        if viewModel.isInitialLoading && viewModel.eventsByLeague.isEmpty {
             HStack(spacing: 18) {
                 ProgressView()
                 Text("Loading scoreboards…")
@@ -96,11 +133,14 @@ struct SportsView: View {
                     .foregroundStyle(.secondary)
                 Text("No \(selectedLeague.rawValue) games on the current scoreboard")
                     .font(.title2)
-                if let error = viewModel.errorMessage {
+                if let error = viewModel.errorByLeague[selectedLeague] {
                     Text(error)
                         .font(.body)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
+                    Button("Try Again") {
+                        Task { await viewModel.refresh(selectedLeague, force: true) }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -115,6 +155,49 @@ struct SportsView: View {
             }
         }
     }
+
+    private func staleDataBanner(_ error: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "wifi.exclamationmark")
+            Text("Latest refresh failed. Showing the last successful scoreboard.")
+                .fontWeight(.semibold)
+            Spacer()
+            Text(error)
+                .lineLimit(1)
+                .foregroundStyle(.secondary)
+        }
+        .font(.caption)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func adaptiveRefreshLoop(for league: SportsLeague) async {
+        while !Task.isCancelled {
+            guard scenePhase == .active else { return }
+
+            let interval = viewModel.recommendedRefreshInterval(for: league)
+            let elapsed = viewModel.lastUpdatedByLeague[league].map {
+                Date().timeIntervalSince($0)
+            } ?? interval
+
+            if elapsed >= interval {
+                await viewModel.refresh(league, force: true)
+            }
+
+            let updatedInterval = viewModel.recommendedRefreshInterval(for: league)
+            let updatedElapsed = viewModel.lastUpdatedByLeague[league].map {
+                Date().timeIntervalSince($0)
+            } ?? max(updatedInterval - 5, 0)
+            let wait = max(5, updatedInterval - updatedElapsed)
+
+            do {
+                try await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            } catch {
+                return
+            }
+        }
+    }
 }
 
 private struct GameCard: View {
@@ -125,12 +208,17 @@ private struct GameCard: View {
             HStack {
                 Text(statusText)
                     .font(.headline)
-                    .foregroundStyle(isLive ? .red : .secondary)
+                    .foregroundStyle(event.isLive ? .red : .secondary)
                 Spacer()
-                if isLive {
-                    Circle()
-                        .fill(.red)
-                        .frame(width: 12, height: 12)
+                if event.isLive {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(.red)
+                            .frame(width: 12, height: 12)
+                        Text("LIVE")
+                            .font(.caption.bold())
+                            .foregroundStyle(.red)
+                    }
                 }
             }
 
@@ -186,10 +274,6 @@ private struct GameCard: View {
             Text(competitor?.score ?? "–")
                 .font(.system(size: 42, weight: .black, design: .rounded))
         }
-    }
-
-    private var isLive: Bool {
-        event.status.type.state == "in"
     }
 
     private var statusText: String {
