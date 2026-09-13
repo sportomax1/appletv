@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct WeatherView: View {
+    let isActive: Bool
+
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel = WeatherViewModel()
 
@@ -41,15 +43,20 @@ struct WeatherView: View {
                 .padding(.vertical, 45)
             }
         }
-        .task {
+        .task(id: refreshTaskID) {
+            guard scenePhase == .active, isActive else { return }
+
             if viewModel.weather == nil {
                 await viewModel.refresh(force: true)
             }
-        }
-        .task(id: scenePhase) {
-            guard scenePhase == .active else { return }
+
+            guard !Task.isCancelled, scenePhase == .active, isActive else { return }
             await autoRefreshLoop()
         }
+    }
+
+    private var refreshTaskID: String {
+        "\(scenePhase == .active ? "active" : "inactive")-\(isActive ? "visible" : "hidden")"
     }
 
     private var header: some View {
@@ -311,7 +318,7 @@ struct WeatherView: View {
                 return
             }
 
-            guard scenePhase == .active else { return }
+            guard scenePhase == .active, isActive else { return }
             await viewModel.refresh(force: true)
         }
     }
