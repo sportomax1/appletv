@@ -19,11 +19,10 @@ jobs:
 
       - name: Build Apple TV Hub
         run: |
-          set -o pipefail
           xcodebuild \
             -project AppleTVHub.xcodeproj \
             -target AppleTVHub \
             -sdk appletvsimulator \
             -configuration Debug \
             CODE_SIGNING_ALLOWED=NO \
-            build | xcpretty
+            build
