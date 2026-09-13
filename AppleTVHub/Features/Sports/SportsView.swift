@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct SportsView: View {
+    let isActive: Bool
+
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel = SportsViewModel()
     @AppStorage("sports.selectedLeague") private var selectedLeagueRaw = SportsLeague.nfl.rawValue
@@ -36,19 +38,20 @@ struct SportsView: View {
             .padding(.horizontal, 70)
             .padding(.vertical, 45)
         }
-        .task {
+        .task(id: refreshTaskID) {
+            guard scenePhase == .active, isActive else { return }
+
             if !viewModel.hasAnyData {
                 await viewModel.refreshAll()
             }
-        }
-        .task(id: refreshTaskID) {
-            guard scenePhase == .active else { return }
+
+            guard !Task.isCancelled, scenePhase == .active, isActive else { return }
             await adaptiveRefreshLoop(for: selectedLeague)
         }
     }
 
     private var refreshTaskID: String {
-        "\(selectedLeague.rawValue)-\(scenePhase == .active ? "active" : "inactive")"
+        "\(selectedLeague.rawValue)-\(scenePhase == .active ? "active" : "inactive")-\(isActive ? "visible" : "hidden")"
     }
 
     private var header: some View {
@@ -174,7 +177,7 @@ struct SportsView: View {
 
     private func adaptiveRefreshLoop(for league: SportsLeague) async {
         while !Task.isCancelled {
-            guard scenePhase == .active else { return }
+            guard scenePhase == .active, isActive else { return }
 
             let interval = viewModel.recommendedRefreshInterval(for: league)
             let elapsed = viewModel.lastUpdatedByLeague[league].map {
@@ -184,6 +187,8 @@ struct SportsView: View {
             if elapsed >= interval {
                 await viewModel.refresh(league, force: true)
             }
+
+            guard !Task.isCancelled, scenePhase == .active, isActive else { return }
 
             let updatedInterval = viewModel.recommendedRefreshInterval(for: league)
             let updatedElapsed = viewModel.lastUpdatedByLeague[league].map {
