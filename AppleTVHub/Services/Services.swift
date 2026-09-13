@@ -17,6 +17,7 @@ final class SportsViewModel: ObservableObject {
     func refreshAll() async {
         guard !isInitialLoading else { return }
         isInitialLoading = true
+        defer { isInitialLoading = false }
 
         await withTaskGroup(of: (SportsLeague, Result<[SportsEvent], Error>).self) { group in
             for league in SportsLeague.allCases {
@@ -35,11 +36,12 @@ final class SportsViewModel: ObservableObject {
 
             for await (league, result) in group {
                 loadingLeagues.remove(league)
+                if case .failure(let error) = result, error is CancellationError {
+                    continue
+                }
                 apply(result, to: league)
             }
         }
-
-        isInitialLoading = false
     }
 
     func refresh(_ league: SportsLeague, force: Bool = false) async {
@@ -59,6 +61,8 @@ final class SportsViewModel: ObservableObject {
         do {
             let events = try await SportsService.fetchScoreboard(for: league)
             apply(.success(events), to: league)
+        } catch is CancellationError {
+            return
         } catch {
             apply(.failure(error), to: league)
         }
@@ -171,6 +175,7 @@ enum SportsService {
         request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
 
         let data = try await fetchWithOneRetry(request)
+        try Task.checkCancellation()
         return try JSONDecoder().decode(ESPNScoreboardResponse.self, from: data).events
     }
 
@@ -178,6 +183,8 @@ enum SportsService {
         var finalError: Error = URLError(.unknown)
 
         for attempt in 0..<2 {
+            try Task.checkCancellation()
+
             do {
                 let (data, response) = try await URLSession.shared.data(for: request)
                 guard let http = response as? HTTPURLResponse else {
@@ -194,14 +201,22 @@ enum SportsService {
 
                 throw URLError(.badServerResponse)
             } catch {
+                if isCancellation(error) {
+                    throw CancellationError()
+                }
+
                 finalError = error
                 if attempt == 0 {
-                    try? await Task.sleep(nanoseconds: 700_000_000)
+                    try await Task.sleep(nanoseconds: 700_000_000)
                 }
             }
         }
 
         throw finalError
+    }
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled
     }
 }
 
@@ -247,6 +262,8 @@ final class WeatherViewModel: ObservableObject {
         do {
             weather = try await WeatherService.fetchWeather(for: location)
             lastUpdated = Date()
+        } catch is CancellationError {
+            return
         } catch {
             // Keep the previous successful forecast visible if a refresh fails.
             errorMessage = error.localizedDescription
@@ -277,21 +294,32 @@ enum WeatherService {
 
         var finalError: Error = URLError(.unknown)
         for attempt in 0..<2 {
+            try Task.checkCancellation()
+
             do {
                 let (data, response) = try await URLSession.shared.data(for: request)
                 guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
                     throw URLError(.badServerResponse)
                 }
+                try Task.checkCancellation()
                 return try JSONDecoder().decode(OpenMeteoResponse.self, from: data)
             } catch {
+                if isCancellation(error) {
+                    throw CancellationError()
+                }
+
                 finalError = error
                 if attempt == 0 {
-                    try? await Task.sleep(nanoseconds: 700_000_000)
+                    try await Task.sleep(nanoseconds: 700_000_000)
                 }
             }
         }
 
         throw finalError
+    }
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled
     }
 }
 
