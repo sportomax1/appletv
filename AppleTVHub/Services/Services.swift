@@ -40,10 +40,11 @@ final class SportsViewModel: ObservableObject {
     func refresh(_ league: SportsLeague, force: Bool = false) async {
         guard !loadingLeagues.contains(league) else { return }
 
-        if !force,
-           let lastUpdated = lastUpdatedByLeague[league],
-           Date().timeIntervalSince(lastUpdated) < minimumRefreshSpacing(for: league) {
-            return
+        if let lastUpdated = lastUpdatedByLeague[league] {
+            let elapsed = Date().timeIntervalSince(lastUpdated)
+            // Even explicit refreshes are debounced so remote-button mashing cannot hammer the endpoint.
+            if elapsed < 5 { return }
+            if !force && elapsed < minimumRefreshSpacing(for: league) { return }
         }
 
         loadingLeagues.insert(league)
@@ -176,10 +177,10 @@ final class WeatherViewModel: ObservableObject {
     func refresh(force: Bool = false) async {
         guard !isLoading else { return }
 
-        if !force,
-           let lastUpdated,
-           Date().timeIntervalSince(lastUpdated) < 10 * 60 {
-            return
+        if let lastUpdated {
+            let elapsed = Date().timeIntervalSince(lastUpdated)
+            if elapsed < 10 { return }
+            if !force && elapsed < 10 * 60 { return }
         }
 
         isLoading = true
