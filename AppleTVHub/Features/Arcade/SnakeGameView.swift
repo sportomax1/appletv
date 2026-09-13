@@ -16,8 +16,11 @@ struct SnakeGameView: View {
     @State private var direction: Direction = .right
     @State private var queuedDirection: Direction = .right
     @State private var score = 0
-    @State private var best = 0
+    @AppStorage("arcade.snake.best") private var best = 0
     @State private var isPaused = false
+    @State private var isGameOver = false
+    @State private var didWin = false
+    @FocusState private var restartFocused: Bool
 
     private let columns = 24
     private let rows = 14
@@ -63,16 +66,21 @@ struct SnakeGameView: View {
                         context.fill(Path(roundedRect: rect, cornerRadius: 7), with: .color(.green))
                     }
 
-                    let foodRect = cellRect(food, boardRect: boardRect, cellSize: cellSize).insetBy(dx: 5, dy: 5)
-                    context.fill(Path(ellipseIn: foodRect), with: .color(.red))
+                    if !didWin {
+                        let foodRect = cellRect(food, boardRect: boardRect, cellSize: cellSize).insetBy(dx: 5, dy: 5)
+                        context.fill(Path(ellipseIn: foodRect), with: .color(.red))
+                    }
                 }
 
-                if isPaused {
+                if isGameOver {
+                    endOverlay
+                } else if isPaused {
                     pauseOverlay
                 }
             }
-            .focusable(true)
+            .focusable(!isGameOver)
             .onMoveCommand { command in
+                guard !isPaused, !isGameOver else { return }
                 switch command {
                 case .up where direction != .down: queuedDirection = .up
                 case .down where direction != .up: queuedDirection = .down
@@ -82,11 +90,17 @@ struct SnakeGameView: View {
                 }
             }
             .onPlayPauseCommand {
+                guard !isGameOver else { return }
                 isPaused.toggle()
             }
             .onReceive(timer) { _ in
-                guard !isPaused else { return }
+                guard !isPaused, !isGameOver else { return }
                 advance()
+            }
+            .onChange(of: isGameOver) { newValue in
+                if newValue {
+                    restartFocused = true
+                }
             }
         }
         .navigationTitle("Snake")
@@ -121,33 +135,46 @@ struct SnakeGameView: View {
         }
 
         let hitWall = next.x < 0 || next.x >= columns || next.y < 0 || next.y >= rows
-        let hitSelf = snake.contains(next)
+        let isEating = next == food
+        // Moving into the cell the tail is vacating is legal when not eating.
+        let collisionBody = isEating ? snake : Array(snake.dropLast())
+        let hitSelf = collisionBody.contains(next)
+
         if hitWall || hitSelf {
-            best = max(best, score)
-            reset()
+            finishGame(won: false)
             return
         }
 
         snake.insert(next, at: 0)
 
-        if next == food {
+        if isEating {
             score += 1
             best = max(best, score)
-            placeFood()
+            if !placeFood() {
+                finishGame(won: true)
+            }
         } else {
             snake.removeLast()
         }
     }
 
-    private func placeFood() {
+    @discardableResult
+    private func placeFood() -> Bool {
         let occupied = Set(snake)
         let available = (0..<columns).flatMap { x in
             (0..<rows).map { Cell(x: x, y: $0) }
         }.filter { !occupied.contains($0) }
 
-        if let nextFood = available.randomElement() {
-            food = nextFood
-        }
+        guard let nextFood = available.randomElement() else { return false }
+        food = nextFood
+        return true
+    }
+
+    private func finishGame(won: Bool) {
+        best = max(best, score)
+        didWin = won
+        isPaused = false
+        isGameOver = true
     }
 
     private func reset() {
@@ -155,7 +182,11 @@ struct SnakeGameView: View {
         direction = .right
         queuedDirection = .right
         score = 0
-        placeFood()
+        isPaused = false
+        isGameOver = false
+        didWin = false
+        restartFocused = false
+        _ = placeFood()
     }
 
     private var pauseOverlay: some View {
@@ -165,6 +196,23 @@ struct SnakeGameView: View {
             Text("Press Play/Pause to continue")
                 .font(.title3)
                 .foregroundStyle(.secondary)
+        }
+        .padding(40)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28))
+    }
+
+    private var endOverlay: some View {
+        VStack(spacing: 18) {
+            Text(didWin ? "YOU WIN" : "GAME OVER")
+                .font(.system(size: 58, weight: .black, design: .rounded))
+            Text("Score \(score) · Best \(best)")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Button("Play Again") {
+                reset()
+            }
+            .buttonStyle(.borderedProminent)
+            .focused($restartFocused)
         }
         .padding(40)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28))
