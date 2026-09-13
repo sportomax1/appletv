@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 @MainActor
 final class SportsViewModel: ObservableObject {
@@ -118,27 +119,7 @@ enum WeatherService {
     }
 }
 
-extension ISO8601DateFormatter {
-    static let sports: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
-}
-
 extension DateFormatter {
-    static let gameDate: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE h:mm a"
-        return formatter
-    }()
-
-    static let hourOnly: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "ha"
-        return formatter
-    }()
-
     static let weekdayShort: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "EEE"
