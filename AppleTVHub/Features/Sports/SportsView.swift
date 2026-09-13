@@ -154,7 +154,7 @@ struct SportsView: View {
                         GameCard(event: event)
                     }
                 }
-                .padding(.vertical, 18)
+                .padding(.vertical, 22)
             }
         }
     }
@@ -180,7 +180,7 @@ struct SportsView: View {
             guard scenePhase == .active, isActive else { return }
 
             let interval = viewModel.recommendedRefreshInterval(for: league)
-            let elapsed = viewModel.lastUpdatedByLeague[league].map {
+            let elapsed = viewModel.refreshReferenceDate(for: league).map {
                 Date().timeIntervalSince($0)
             } ?? interval
 
@@ -191,7 +191,7 @@ struct SportsView: View {
             guard !Task.isCancelled, scenePhase == .active, isActive else { return }
 
             let updatedInterval = viewModel.recommendedRefreshInterval(for: league)
-            let updatedElapsed = viewModel.lastUpdatedByLeague[league].map {
+            let updatedElapsed = viewModel.refreshReferenceDate(for: league).map {
                 Date().timeIntervalSince($0)
             } ?? max(updatedInterval - 5, 0)
             let wait = max(5, updatedInterval - updatedElapsed)
@@ -207,6 +207,7 @@ struct SportsView: View {
 
 private struct GameCard: View {
     let event: SportsEvent
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -243,8 +244,17 @@ private struct GameCard: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+                .strokeBorder(
+                    Color.white.opacity(isFocused ? 0.50 : 0.10),
+                    lineWidth: isFocused ? 3 : 1
+                )
         }
+        .scaleEffect(isFocused ? 1.035 : 1)
+        .animation(.easeOut(duration: 0.12), value: isFocused)
+        .focusable()
+        .focused($isFocused)
+        .zIndex(isFocused ? 1 : 0)
+        .accessibilityLabel("\(event.awayTeam?.team.displayName ?? "Away team") versus \(event.homeTeam?.team.displayName ?? "Home team"), \(statusText)")
     }
 
     private func teamRow(_ competitor: Competitor?) -> some View {
