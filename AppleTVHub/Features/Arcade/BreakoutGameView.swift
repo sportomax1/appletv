@@ -13,14 +13,16 @@ struct BreakoutGameView: View {
     @State private var paddleX: CGFloat = 500
     @State private var bricks: [Brick] = BreakoutGameView.makeBricks()
     @State private var score = 0
+    @AppStorage("arcade.breakout.best") private var best = 0
     @State private var lives = 3
     @State private var isPaused = false
+    @State private var lastTickAt: Date?
+    @FocusState private var restartFocused: Bool
 
     private let timer = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
     private let paddleWidth: CGFloat = 190
     private let paddleHeight: CGFloat = 24
     private let ballSize: CGFloat = 24
-    private let brickRows = 5
     private let brickColumns = 10
 
     var body: some View {
@@ -37,6 +39,9 @@ struct BreakoutGameView: View {
                         Spacer()
                         Text("Score \(score)")
                             .font(.title2.bold())
+                        Text("Best \(best)")
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
                         Text("Lives \(lives)")
                             .font(.title2)
                             .foregroundStyle(.secondary)
@@ -67,18 +72,17 @@ struct BreakoutGameView: View {
                     .position(ball)
 
                 if isPaused {
-                    pauseOverlay(title: "PAUSED", subtitle: "Press Play/Pause to continue")
-                } else if lives <= 0 {
-                    pauseOverlay(title: "GAME OVER", subtitle: "Press Select to restart")
-                } else if bricks.isEmpty {
-                    pauseOverlay(title: "YOU WIN", subtitle: "Press Select for a new wall")
+                    pauseOverlay
+                } else if lives <= 0 || bricks.isEmpty {
+                    endOverlay(in: size)
                 }
             }
-            .focusable(true)
+            .focusable(lives > 0 && !bricks.isEmpty)
             .onAppear {
                 resetBall(in: size)
             }
             .onMoveCommand { direction in
+                guard lives > 0, !bricks.isEmpty, !isPaused else { return }
                 switch direction {
                 case .left:
                     paddleX = max(paddleWidth / 2, paddleX - 75)
@@ -91,25 +95,43 @@ struct BreakoutGameView: View {
             .onPlayPauseCommand {
                 guard lives > 0, !bricks.isEmpty else { return }
                 isPaused.toggle()
+                lastTickAt = nil
             }
-            .onTapGesture {
-                if lives <= 0 || bricks.isEmpty {
-                    restart(in: size)
+            .onReceive(timer) { now in
+                guard !isPaused, lives > 0, !bricks.isEmpty else { return }
+                tick(in: size, now: now)
+            }
+            .onChange(of: lives) { newValue in
+                if newValue <= 0 {
+                    restartFocused = true
                 }
             }
-            .onReceive(timer) { _ in
-                guard !isPaused, lives > 0, !bricks.isEmpty else { return }
-                tick(in: size)
+            .onChange(of: bricks.isEmpty) { isEmpty in
+                if isEmpty {
+                    restartFocused = true
+                }
             }
         }
         .navigationTitle("Breakout")
     }
 
-    private func tick(in size: CGSize) {
+    private func tick(in size: CGSize, now: Date) {
         guard size.width > 0, size.height > 0 else { return }
+        guard let previousTick = lastTickAt else {
+            lastTickAt = now
+            return
+        }
 
+        let delta = min(max(now.timeIntervalSince(previousTick), 1.0 / 120.0), 1.0 / 30.0)
+        lastTickAt = now
+        let frameScale = CGFloat(delta * 60)
+
+        let previousBall = ball
         let radius = ballSize / 2
-        var next = CGPoint(x: ball.x + velocity.dx, y: ball.y + velocity.dy)
+        var next = CGPoint(
+            x: ball.x + velocity.dx * frameScale,
+            y: ball.y + velocity.dy * frameScale
+        )
 
         if next.x <= radius || next.x >= size.width - radius {
             velocity.dx *= -1
@@ -129,23 +151,45 @@ struct BreakoutGameView: View {
 
         if paddleHit {
             velocity.dy = -abs(velocity.dy)
-            velocity.dx += ((next.x - paddleX) / (paddleWidth / 2)) * 1.4
+            velocity.dx = min(max(
+                velocity.dx + ((next.x - paddleX) / (paddleWidth / 2)) * 1.4,
+                -13
+            ), 13)
             next.y = paddleY - paddleHeight / 2 - radius - 1
         }
 
         let layout = brickLayout(in: size)
-        if let hit = bricks.first(where: { brickRect($0, layout: layout).insetBy(dx: -radius, dy: -radius).contains(next) }) {
+        if let hit = bricks.first(where: {
+            brickRect($0, layout: layout).insetBy(dx: -radius, dy: -radius).contains(next)
+        }) {
+            let rect = brickRect(hit, layout: layout)
             bricks.removeAll { $0.id == hit.id }
             score += 10
-            velocity.dy *= -1
+            best = max(best, score)
+
+            let cameFromVertical = previousBall.y + radius <= rect.minY ||
+                previousBall.y - radius >= rect.maxY
+            if cameFromVertical {
+                velocity.dy *= -1
+            } else {
+                velocity.dx *= -1
+            }
         }
 
         if next.y > size.height + radius {
             lives -= 1
+            best = max(best, score)
             if lives > 0 {
                 resetBall(in: size)
+            } else {
+                lastTickAt = nil
             }
             return
+        }
+
+        if bricks.isEmpty {
+            best = max(best, score)
+            lastTickAt = nil
         }
 
         ball = next
@@ -155,6 +199,7 @@ struct BreakoutGameView: View {
         paddleX = size.width / 2
         ball = CGPoint(x: size.width / 2, y: max(300, size.height * 0.62))
         velocity = CGVector(dx: Bool.random() ? 6 : -6, dy: -7)
+        lastTickAt = nil
     }
 
     private func restart(in size: CGSize) {
@@ -162,6 +207,7 @@ struct BreakoutGameView: View {
         score = 0
         lives = 3
         isPaused = false
+        restartFocused = false
         resetBall(in: size)
     }
 
@@ -188,13 +234,30 @@ struct BreakoutGameView: View {
         )
     }
 
-    private func pauseOverlay(title: String, subtitle: String) -> some View {
+    private var pauseOverlay: some View {
         VStack(spacing: 14) {
-            Text(title)
+            Text("PAUSED")
                 .font(.system(size: 58, weight: .black, design: .rounded))
-            Text(subtitle)
+            Text("Press Play/Pause to continue")
                 .font(.title3)
                 .foregroundStyle(.secondary)
+        }
+        .padding(40)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28))
+    }
+
+    private func endOverlay(in size: CGSize) -> some View {
+        VStack(spacing: 18) {
+            Text(bricks.isEmpty ? "YOU WIN" : "GAME OVER")
+                .font(.system(size: 58, weight: .black, design: .rounded))
+            Text("Score \(score) · Best \(best)")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Button("Play Again") {
+                restart(in: size)
+            }
+            .buttonStyle(.borderedProminent)
+            .focused($restartFocused)
         }
         .padding(40)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28))
