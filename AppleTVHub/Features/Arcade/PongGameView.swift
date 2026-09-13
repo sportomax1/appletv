@@ -6,8 +6,9 @@ struct PongGameView: View {
     @State private var velocity = CGVector(dx: 7, dy: 7)
     @State private var paddleX: CGFloat = 500
     @State private var score = 0
-    @State private var best = 0
+    @AppStorage("arcade.pong.best") private var best = 0
     @State private var isPaused = false
+    @State private var lastTickAt: Date?
 
     private let timer = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
     private let paddleWidth: CGFloat = 180
@@ -68,19 +69,31 @@ struct PongGameView: View {
             }
             .onPlayPauseCommand {
                 isPaused.toggle()
+                lastTickAt = nil
             }
-            .onReceive(timer) { _ in
+            .onReceive(timer) { now in
                 guard !isPaused else { return }
-                tick(in: size)
+                tick(in: size, now: now)
             }
         }
         .navigationTitle("Pong")
     }
 
-    private func tick(in size: CGSize) {
+    private func tick(in size: CGSize, now: Date) {
         guard size.width > 0, size.height > 0 else { return }
+        guard let previousTick = lastTickAt else {
+            lastTickAt = now
+            return
+        }
 
-        var next = CGPoint(x: ball.x + velocity.dx, y: ball.y + velocity.dy)
+        let delta = min(max(now.timeIntervalSince(previousTick), 1.0 / 120.0), 1.0 / 30.0)
+        lastTickAt = now
+        let frameScale = CGFloat(delta * 60)
+
+        var next = CGPoint(
+            x: ball.x + velocity.dx * frameScale,
+            y: ball.y + velocity.dy * frameScale
+        )
         let radius = ballSize / 2
 
         if next.x <= radius || next.x >= size.width - radius {
@@ -99,9 +112,9 @@ struct PongGameView: View {
             next.y - radius <= paddleY + paddleHeight / 2
 
         if velocity.dy > 0 && horizontalHit && verticalHit {
-            velocity.dy = -abs(velocity.dy) * 1.015
+            velocity.dy = -min(abs(velocity.dy) * 1.015, 12)
             let english = (next.x - paddleX) / (paddleWidth / 2)
-            velocity.dx += english * 1.6
+            velocity.dx = min(max(velocity.dx + english * 1.6, -14), 14)
             score += 1
             best = max(best, score)
             next.y = paddleY - paddleHeight / 2 - radius - 1
@@ -121,6 +134,7 @@ struct PongGameView: View {
         paddleX = size.width / 2
         ball = CGPoint(x: size.width / 2, y: max(180, size.height * 0.35))
         velocity = CGVector(dx: Bool.random() ? 7 : -7, dy: 7)
+        lastTickAt = nil
     }
 
     private func pauseOverlay(title: String) -> some View {
