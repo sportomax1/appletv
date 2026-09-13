@@ -37,6 +37,8 @@ final class SportsViewModel: ObservableObject {
             for await (league, result) in group {
                 loadingLeagues.remove(league)
                 if case .failure(let error) = result, error is CancellationError {
+                    // A hidden-tab/background cancellation is not a failed API attempt.
+                    lastAttemptByLeague[league] = lastUpdatedByLeague[league]
                     continue
                 }
                 apply(result, to: league)
@@ -62,6 +64,8 @@ final class SportsViewModel: ObservableObject {
             let events = try await SportsService.fetchScoreboard(for: league)
             apply(.success(events), to: league)
         } catch is CancellationError {
+            // Restore the last successful timestamp so returning to the tab can refresh immediately when needed.
+            lastAttemptByLeague[league] = lastUpdatedByLeague[league]
             return
         } catch {
             apply(.failure(error), to: league)
@@ -111,7 +115,9 @@ final class SportsViewModel: ObservableObject {
     }
 
     func refreshReferenceDate(for league: SportsLeague) -> Date? {
-        lastUpdatedByLeague[league] ?? lastAttemptByLeague[league]
+        // Every network request records lastAttempt, including successful ones, so this is the
+        // correct reference for normal cadence and failure backoff.
+        lastAttemptByLeague[league] ?? lastUpdatedByLeague[league]
     }
 
     private func normalRefreshInterval(for events: [SportsEvent]) -> TimeInterval {
@@ -263,6 +269,8 @@ final class WeatherViewModel: ObservableObject {
             weather = try await WeatherService.fetchWeather(for: location)
             lastUpdated = Date()
         } catch is CancellationError {
+            // Canceled hidden-tab work should not delay the next visible refresh.
+            lastAttempt = lastUpdated
             return
         } catch {
             // Keep the previous successful forecast visible if a refresh fails.
