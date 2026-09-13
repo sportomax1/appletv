@@ -46,9 +46,8 @@ struct WeatherView: View {
         .task(id: refreshTaskID) {
             guard scenePhase == .active, isActive else { return }
 
-            if viewModel.weather == nil {
-                await viewModel.refresh(force: true)
-            }
+            // Entering Weather immediately refreshes only when the stored forecast is stale.
+            await viewModel.refresh(force: viewModel.weather == nil)
 
             guard !Task.isCancelled, scenePhase == .active, isActive else { return }
             await autoRefreshLoop()
@@ -72,9 +71,9 @@ struct WeatherView: View {
             Spacer()
 
             VStack(alignment: .trailing, spacing: 3) {
-                Text("Auto refresh · ~15 min")
+                Text(viewModel.errorMessage == nil ? "Auto refresh · ~15 min" : "Retrying · ~2 min")
                     .font(.caption.bold())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(viewModel.errorMessage == nil ? .secondary : .orange)
                 if let updated = viewModel.lastUpdated {
                     Text("Updated \(updated.formatted(date: .omitted, time: .shortened))")
                         .font(.caption)
@@ -162,24 +161,15 @@ struct WeatherView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 16) {
                     ForEach(hourlyIndices(weather), id: \.self) { index in
-                        VStack(spacing: 12) {
-                            Text(hourLabel(weather.hourly.time[index], weather: weather))
-                                .font(.headline)
-                            Image(systemName: WeatherCode.symbol(weather.hourly.weatherCode[index]))
-                                .symbolRenderingMode(.multicolor)
-                                .font(.system(size: 42))
-                            Text("\(Int(weather.hourly.temperature2m[index].rounded()))°")
-                                .font(.title2.bold())
-                            Label("\(weather.hourly.precipitationProbability[index])%", systemImage: "drop.fill")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(20)
-                        .frame(width: 150, height: 190)
-                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        HourlyForecastCard(
+                            time: hourLabel(weather.hourly.time[index], weather: weather),
+                            temperature: Int(weather.hourly.temperature2m[index].rounded()),
+                            precipitation: weather.hourly.precipitationProbability[index],
+                            weatherCode: weather.hourly.weatherCode[index]
+                        )
                     }
                 }
-                .padding(.vertical, 8)
+                .padding(.vertical, 14)
             }
         }
     }
@@ -312,8 +302,12 @@ struct WeatherView: View {
 
     private func autoRefreshLoop() async {
         while !Task.isCancelled {
+            let wait: UInt64 = viewModel.errorMessage == nil
+                ? 15 * 60 * 1_000_000_000
+                : 2 * 60 * 1_000_000_000
+
             do {
-                try await Task.sleep(nanoseconds: 15 * 60 * 1_000_000_000)
+                try await Task.sleep(nanoseconds: wait)
             } catch {
                 return
             }
@@ -321,5 +315,42 @@ struct WeatherView: View {
             guard scenePhase == .active, isActive else { return }
             await viewModel.refresh(force: true)
         }
+    }
+}
+
+private struct HourlyForecastCard: View {
+    let time: String
+    let temperature: Int
+    let precipitation: Int
+    let weatherCode: Int
+
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Text(time)
+                .font(.headline)
+            Image(systemName: WeatherCode.symbol(weatherCode))
+                .symbolRenderingMode(.multicolor)
+                .font(.system(size: 42))
+            Text("\(temperature)°")
+                .font(.title2.bold())
+            Label("\(precipitation)%", systemImage: "drop.fill")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(20)
+        .frame(width: 150, height: 190)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(Color.white.opacity(isFocused ? 0.50 : 0.08), lineWidth: isFocused ? 3 : 1)
+        }
+        .scaleEffect(isFocused ? 1.06 : 1)
+        .animation(.easeOut(duration: 0.12), value: isFocused)
+        .focusable()
+        .focused($isFocused)
+        .zIndex(isFocused ? 1 : 0)
+        .accessibilityLabel("\(time), \(temperature) degrees, \(WeatherCode.description(weatherCode)), \(precipitation) percent precipitation")
     }
 }
