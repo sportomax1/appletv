@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct WeatherView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel = WeatherViewModel()
 
     var body: some View {
@@ -16,6 +17,10 @@ struct WeatherView: View {
                 VStack(alignment: .leading, spacing: 30) {
                     header
                     locationPicker
+
+                    if let error = viewModel.errorMessage, viewModel.weather != nil {
+                        staleDataBanner(error)
+                    }
 
                     if viewModel.isLoading && viewModel.weather == nil {
                         HStack(spacing: 18) {
@@ -38,8 +43,12 @@ struct WeatherView: View {
         }
         .task {
             if viewModel.weather == nil {
-                await viewModel.refresh()
+                await viewModel.refresh(force: true)
             }
+        }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            await autoRefreshLoop()
         }
     }
 
@@ -55,15 +64,28 @@ struct WeatherView: View {
 
             Spacer()
 
-            if let updated = viewModel.lastUpdated {
-                Text("Updated \(updated.formatted(date: .omitted, time: .shortened))")
+            VStack(alignment: .trailing, spacing: 3) {
+                Text("Auto refresh · ~15 min")
+                    .font(.caption.bold())
                     .foregroundStyle(.secondary)
+                if let updated = viewModel.lastUpdated {
+                    Text("Updated \(updated.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Button {
-                Task { await viewModel.refresh() }
+                Task { await viewModel.refresh(force: true) }
             } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
+                if viewModel.isLoading {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("Refreshing")
+                    }
+                } else {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
             }
             .disabled(viewModel.isLoading)
         }
@@ -134,7 +156,7 @@ struct WeatherView: View {
                 HStack(spacing: 16) {
                     ForEach(hourlyIndices(weather), id: \.self) { index in
                         VStack(spacing: 12) {
-                            Text(hourLabel(weather.hourly.time[index]))
+                            Text(hourLabel(weather.hourly.time[index], weather: weather))
                                 .font(.headline)
                             Image(systemName: WeatherCode.symbol(weather.hourly.weatherCode[index]))
                                 .symbolRenderingMode(.multicolor)
@@ -161,9 +183,9 @@ struct WeatherView: View {
                 .font(.title2.bold())
 
             HStack(spacing: 16) {
-                ForEach(Array(weather.daily.time.indices.prefix(7)), id: \.self) { index in
+                ForEach(Array(0..<dailyCount(weather)), id: \.self) { index in
                     VStack(spacing: 12) {
-                        Text(dayLabel(weather.daily.time[index]))
+                        Text(dayLabel(weather.daily.time[index], weather: weather))
                             .font(.headline)
                         Image(systemName: WeatherCode.symbol(weather.daily.weatherCode[index]))
                             .symbolRenderingMode(.multicolor)
@@ -196,32 +218,101 @@ struct WeatherView: View {
             Text(viewModel.errorMessage ?? "Try refreshing.")
                 .foregroundStyle(.secondary)
             Button("Try Again") {
-                Task { await viewModel.refresh() }
+                Task { await viewModel.refresh(force: true) }
             }
         }
         .frame(maxWidth: .infinity, minHeight: 350)
     }
 
+    private func staleDataBanner(_ error: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "wifi.exclamationmark")
+            Text("Latest refresh failed. Showing the last successful forecast.")
+                .fontWeight(.semibold)
+            Spacer()
+            Text(error)
+                .lineLimit(1)
+                .foregroundStyle(.secondary)
+        }
+        .font(.caption)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 14))
+    }
+
     private func hourlyIndices(_ weather: OpenMeteoResponse) -> [Int] {
-        let nowHour = Calendar.current.component(.hour, from: Date())
-        let start = min(max(nowHour, 0), max(weather.hourly.time.count - 1, 0))
-        let end = min(start + 12, weather.hourly.time.count)
+        let count = min(
+            weather.hourly.time.count,
+            weather.hourly.temperature2m.count,
+            weather.hourly.precipitationProbability.count,
+            weather.hourly.weatherCode.count
+        )
+        guard count > 0 else { return [] }
+
+        let formatter = localHourlyFormatter(for: weather)
+        let now = Date()
+        let start = (0..<count).first { index in
+            guard let date = formatter.date(from: weather.hourly.time[index]) else { return false }
+            return date >= now.addingTimeInterval(-30 * 60)
+        } ?? max(count - 1, 0)
+        let end = min(start + 12, count)
         return start < end ? Array(start..<end) : []
     }
 
-    private func hourLabel(_ isoLocal: String) -> String {
-        guard isoLocal.count >= 13 else { return isoLocal }
-        let hour = Int(isoLocal.dropFirst(11).prefix(2)) ?? 0
-        if hour == 0 { return "12 AM" }
-        if hour < 12 { return "\(hour) AM" }
-        if hour == 12 { return "12 PM" }
-        return "\(hour - 12) PM"
+    private func dailyCount(_ weather: OpenMeteoResponse) -> Int {
+        min(
+            7,
+            weather.daily.time.count,
+            weather.daily.weatherCode.count,
+            weather.daily.temperature2mMax.count,
+            weather.daily.temperature2mMin.count,
+            weather.daily.precipitationProbabilityMax.count
+        )
     }
 
-    private func dayLabel(_ date: String) -> String {
+    private func hourLabel(_ isoLocal: String, weather: OpenMeteoResponse) -> String {
+        let parser = localHourlyFormatter(for: weather)
+        guard let date = parser.date(from: isoLocal) else { return isoLocal }
+
+        let display = DateFormatter()
+        display.locale = Locale(identifier: "en_US")
+        display.timeZone = TimeZone(identifier: weather.timezone) ?? .current
+        display.dateFormat = "h a"
+        return display.string(from: date)
+    }
+
+    private func dayLabel(_ dateString: String, weather: OpenMeteoResponse) -> String {
+        let parser = DateFormatter()
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.timeZone = TimeZone(identifier: weather.timezone) ?? .current
+        parser.dateFormat = "yyyy-MM-dd"
+        guard let date = parser.date(from: dateString) else { return dateString }
+
+        let display = DateFormatter()
+        display.locale = Locale(identifier: "en_US")
+        display.timeZone = parser.timeZone
+        display.dateFormat = "EEE"
+        return display.string(from: date)
+    }
+
+    private func localHourlyFormatter(for weather: OpenMeteoResponse) -> DateFormatter {
         let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        guard let parsed = formatter.date(from: date) else { return date }
-        return DateFormatter.weekdayShort.string(from: parsed)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: weather.timezone) ?? .current
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm"
+        return formatter
+    }
+
+    private func autoRefreshLoop() async {
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(nanoseconds: 15 * 60 * 1_000_000_000)
+            } catch {
+                return
+            }
+
+            guard scenePhase == .active else { return }
+            await viewModel.refresh(force: true)
+        }
     }
 }
