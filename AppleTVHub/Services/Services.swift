@@ -7,7 +7,10 @@ final class SportsViewModel: ObservableObject {
     @Published private(set) var loadingLeagues: Set<SportsLeague> = []
     @Published private(set) var errorByLeague: [SportsLeague: String] = [:]
     @Published private(set) var lastUpdatedByLeague: [SportsLeague: Date] = [:]
+    @Published private(set) var lastAttemptByLeague: [SportsLeague: Date] = [:]
     @Published private(set) var isInitialLoading = false
+
+    private var failureCountByLeague: [SportsLeague: Int] = [:]
 
     var hasAnyData: Bool { !eventsByLeague.isEmpty }
 
@@ -19,6 +22,8 @@ final class SportsViewModel: ObservableObject {
             for league in SportsLeague.allCases {
                 guard !loadingLeagues.contains(league) else { continue }
                 loadingLeagues.insert(league)
+                lastAttemptByLeague[league] = Date()
+
                 group.addTask {
                     do {
                         return (league, .success(try await SportsService.fetchScoreboard(for: league)))
@@ -40,14 +45,15 @@ final class SportsViewModel: ObservableObject {
     func refresh(_ league: SportsLeague, force: Bool = false) async {
         guard !loadingLeagues.contains(league) else { return }
 
-        if let lastUpdated = lastUpdatedByLeague[league] {
-            let elapsed = Date().timeIntervalSince(lastUpdated)
-            // Even explicit refreshes are debounced so remote-button mashing cannot hammer the endpoint.
+        if let lastAttempt = lastAttemptByLeague[league] {
+            let elapsed = Date().timeIntervalSince(lastAttempt)
+            // Explicit refreshes are still debounced so remote-button mashing cannot hammer the endpoint.
             if elapsed < 5 { return }
             if !force && elapsed < minimumRefreshSpacing(for: league) { return }
         }
 
         loadingLeagues.insert(league)
+        lastAttemptByLeague[league] = Date()
         defer { loadingLeagues.remove(league) }
 
         do {
@@ -60,6 +66,51 @@ final class SportsViewModel: ObservableObject {
 
     func recommendedRefreshInterval(for league: SportsLeague) -> TimeInterval {
         let events = eventsByLeague[league] ?? []
+        let normalInterval = normalRefreshInterval(for: events)
+
+        guard errorByLeague[league] != nil else {
+            return normalInterval
+        }
+
+        let failures = max(failureCountByLeague[league] ?? 1, 1)
+        let failureBackoff: TimeInterval
+        switch failures {
+        case 1: failureBackoff = 60
+        case 2: failureBackoff = 120
+        case 3: failureBackoff = 240
+        default: failureBackoff = 300
+        }
+
+        // If this league has never loaded, retry on the bounded failure cadence instead of
+        // falling into either a five-second loop or a fifteen-minute wait.
+        if events.isEmpty {
+            return failureBackoff
+        }
+
+        return max(normalInterval, failureBackoff)
+    }
+
+    func refreshDescription(for league: SportsLeague) -> String {
+        let seconds = recommendedRefreshInterval(for: league)
+
+        if errorByLeague[league] != nil {
+            return "Retrying · \(intervalLabel(seconds))"
+        }
+
+        switch seconds {
+        case ...20: return "Live · ~20 sec"
+        case ...60: return "Starting soon · ~1 min"
+        case ...120: return "Upcoming · ~2 min"
+        case ...300: return "Scheduled · ~5 min"
+        default: return "Idle · ~15 min"
+        }
+    }
+
+    func refreshReferenceDate(for league: SportsLeague) -> Date? {
+        lastUpdatedByLeague[league] ?? lastAttemptByLeague[league]
+    }
+
+    private func normalRefreshInterval(for events: [SportsEvent]) -> TimeInterval {
         let now = Date()
 
         if events.contains(where: { $0.isLive }) {
@@ -81,14 +132,11 @@ final class SportsViewModel: ObservableObject {
         return 900
     }
 
-    func refreshDescription(for league: SportsLeague) -> String {
-        let seconds = recommendedRefreshInterval(for: league)
+    private func intervalLabel(_ seconds: TimeInterval) -> String {
         switch seconds {
-        case ...20: return "Live · ~20 sec"
-        case ...60: return "Starting soon · ~1 min"
-        case ...120: return "Upcoming · ~2 min"
-        case ...300: return "Scheduled · ~5 min"
-        default: return "Idle · ~15 min"
+        case ..<60: return "~\(Int(seconds)) sec"
+        case ..<120: return "~1 min"
+        default: return "~\(Int((seconds / 60).rounded())) min"
         }
     }
 
@@ -101,10 +149,12 @@ final class SportsViewModel: ObservableObject {
         case .success(let events):
             eventsByLeague[league] = events
             errorByLeague[league] = nil
+            failureCountByLeague[league] = 0
             lastUpdatedByLeague[league] = Date()
         case .failure(let error):
             // Preserve the last successful scoreboard instead of blanking the screen.
             errorByLeague[league] = error.localizedDescription
+            failureCountByLeague[league, default: 0] += 1
         }
     }
 }
@@ -162,6 +212,7 @@ final class WeatherViewModel: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var lastUpdated: Date?
+    @Published private(set) var lastAttempt: Date?
 
     init() {
         location = WeatherLocation.savedOrDefault()
@@ -177,13 +228,19 @@ final class WeatherViewModel: ObservableObject {
     func refresh(force: Bool = false) async {
         guard !isLoading else { return }
 
-        if let lastUpdated {
-            let elapsed = Date().timeIntervalSince(lastUpdated)
+        if let lastAttempt {
+            let elapsed = Date().timeIntervalSince(lastAttempt)
             if elapsed < 10 { return }
-            if !force && elapsed < 10 * 60 { return }
+        }
+
+        if !force,
+           let lastUpdated,
+           Date().timeIntervalSince(lastUpdated) < 10 * 60 {
+            return
         }
 
         isLoading = true
+        lastAttempt = Date()
         defer { isLoading = false }
         errorMessage = nil
 
