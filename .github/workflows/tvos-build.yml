@@ -17,12 +17,22 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
-      - name: Build Apple TV Hub
+      - name: Build Debug
         run: |
           xcodebuild \
             -project AppleTVHub.xcodeproj \
             -target AppleTVHub \
             -sdk appletvsimulator \
             -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Build Release
+        run: |
+          xcodebuild \
+            -project AppleTVHub.xcodeproj \
+            -target AppleTVHub \
+            -sdk appletvsimulator \
+            -configuration Release \
             CODE_SIGNING_ALLOWED=NO \
             build
