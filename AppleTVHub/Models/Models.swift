@@ -44,6 +44,12 @@ struct SportsEvent: Decodable, Identifiable {
     var competition: Competition? { competitions.first }
     var homeTeam: Competitor? { competition?.competitors.first(where: { $0.homeAway == "home" }) }
     var awayTeam: Competitor? { competition?.competitors.first(where: { $0.homeAway == "away" }) }
+    var isLive: Bool { status.type.state == "in" }
+    var isFinal: Bool { status.type.state == "post" }
+
+    var startDate: Date? {
+        SportsDateParser.date(from: date)
+    }
 }
 
 struct Competition: Decodable {
@@ -82,6 +88,24 @@ struct EventStatusType: Decodable {
     let shortDetail: String?
 }
 
+private enum SportsDateParser {
+    private static let fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let standard: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    static func date(from value: String) -> Date? {
+        fractional.date(from: value) ?? standard.date(from: value)
+    }
+}
+
 // MARK: - Weather
 
 struct WeatherLocation: Identifiable, Hashable {
@@ -97,6 +121,11 @@ struct WeatherLocation: Identifiable, Hashable {
         .init(id: "colorado-springs", name: "Colorado Springs", subtitle: "Colorado", latitude: 38.8339, longitude: -104.8214),
         .init(id: "fort-collins", name: "Fort Collins", subtitle: "Colorado", latitude: 40.5853, longitude: -105.0844)
     ]
+
+    static func savedOrDefault() -> WeatherLocation {
+        let savedID = UserDefaults.standard.string(forKey: "weather.locationID")
+        return presets.first(where: { $0.id == savedID }) ?? presets[0]
+    }
 }
 
 struct OpenMeteoResponse: Decodable {
