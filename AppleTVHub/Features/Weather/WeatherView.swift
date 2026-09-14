@@ -111,7 +111,7 @@ struct WeatherView: View {
                         Task { await viewModel.select(location) }
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(location.name).fontWeight(.bold())
+                            Text(location.name).fontWeight(.bold)
                             Text(location.subtitle)
                                 .font(.caption)
                                 .foregroundStyle(viewModel.location == location ? Color.black.opacity(0.65) : Color.secondary)
