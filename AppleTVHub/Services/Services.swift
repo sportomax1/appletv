@@ -37,7 +37,6 @@ final class SportsViewModel: ObservableObject {
             for await (league, result) in group {
                 loadingLeagues.remove(league)
                 if case .failure(let error) = result, error is CancellationError {
-                    // A hidden-tab/background cancellation is not a failed API attempt.
                     lastAttemptByLeague[league] = lastUpdatedByLeague[league]
                     continue
                 }
@@ -51,7 +50,6 @@ final class SportsViewModel: ObservableObject {
 
         if let lastAttempt = lastAttemptByLeague[league] {
             let elapsed = Date().timeIntervalSince(lastAttempt)
-            // Explicit refreshes are still debounced so remote-button mashing cannot hammer the endpoint.
             if elapsed < 5 { return }
             if !force && elapsed < minimumRefreshSpacing(for: league) { return }
         }
@@ -64,7 +62,6 @@ final class SportsViewModel: ObservableObject {
             let events = try await SportsService.fetchScoreboard(for: league)
             apply(.success(events), to: league)
         } catch is CancellationError {
-            // Restore the last successful timestamp so returning to the tab can refresh immediately when needed.
             lastAttemptByLeague[league] = lastUpdatedByLeague[league]
             return
         } catch {
@@ -89,8 +86,6 @@ final class SportsViewModel: ObservableObject {
         default: failureBackoff = 300
         }
 
-        // If this league has never loaded, retry on the bounded failure cadence instead of
-        // falling into either a five-second loop or a fifteen-minute wait.
         if events.isEmpty {
             return failureBackoff
         }
@@ -115,8 +110,6 @@ final class SportsViewModel: ObservableObject {
     }
 
     func refreshReferenceDate(for league: SportsLeague) -> Date? {
-        // Every network request records lastAttempt, including successful ones, so this is the
-        // correct reference for normal cadence and failure backoff.
         lastAttemptByLeague[league] ?? lastUpdatedByLeague[league]
     }
 
@@ -162,7 +155,6 @@ final class SportsViewModel: ObservableObject {
             failureCountByLeague[league] = 0
             lastUpdatedByLeague[league] = Date()
         case .failure(let error):
-            // Preserve the last successful scoreboard instead of blanking the screen.
             errorByLeague[league] = error.localizedDescription
             failureCountByLeague[league, default: 0] += 1
         }
@@ -171,9 +163,9 @@ final class SportsViewModel: ObservableObject {
 
 enum SportsService {
     static func fetchScoreboard(for league: SportsLeague) async throws -> [SportsEvent] {
-        guard let url = URL(string: "https://site.api.espn.com/apis/site/v2/sports/\(league.endpointPath)/scoreboard") else {
-            throw URLError(.badURL)
-        }
+        var components = URLComponents(string: "https://site.api.espn.com/apis/site/v2/sports/\(league.endpointPath)/scoreboard")!
+        components.queryItems = [URLQueryItem(name: "limit", value: "100")]
+        guard let url = components.url else { throw URLError(.badURL) }
 
         var request = URLRequest(url: url)
         request.timeoutInterval = 12
@@ -269,11 +261,9 @@ final class WeatherViewModel: ObservableObject {
             weather = try await WeatherService.fetchWeather(for: location)
             lastUpdated = Date()
         } catch is CancellationError {
-            // Canceled hidden-tab work should not delay the next visible refresh.
             lastAttempt = lastUpdated
             return
         } catch {
-            // Keep the previous successful forecast visible if a refresh fails.
             errorMessage = error.localizedDescription
         }
     }
@@ -285,9 +275,9 @@ enum WeatherService {
         components.queryItems = [
             .init(name: "latitude", value: String(location.latitude)),
             .init(name: "longitude", value: String(location.longitude)),
-            .init(name: "current", value: "temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m"),
-            .init(name: "hourly", value: "temperature_2m,precipitation_probability,weather_code"),
-            .init(name: "daily", value: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"),
+            .init(name: "current", value: "temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,wind_gusts_10m,precipitation,cloud_cover"),
+            .init(name: "hourly", value: "temperature_2m,precipitation_probability,weather_code,wind_speed_10m"),
+            .init(name: "daily", value: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,wind_speed_10m_max,uv_index_max,sunrise,sunset"),
             .init(name: "temperature_unit", value: "fahrenheit"),
             .init(name: "wind_speed_unit", value: "mph"),
             .init(name: "precipitation_unit", value: "inch"),
