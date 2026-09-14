@@ -34,6 +34,15 @@ enum SportsLeague: String, CaseIterable, Identifiable, Hashable {
         case .nhl, .mlb: return ["COL"]
         }
     }
+
+    var favoriteTeamName: String {
+        switch self {
+        case .nfl: return "Denver Broncos"
+        case .nba: return "Denver Nuggets"
+        case .nhl: return "Colorado Avalanche"
+        case .mlb: return "Colorado Rockies"
+        }
+    }
 }
 
 struct ESPNScoreboardResponse: Decodable {
@@ -47,6 +56,8 @@ struct SportsEvent: Decodable, Identifiable {
     let date: String
     let status: EventStatus
     let competitions: [Competition]
+    let season: SportsSeason?
+    let week: SportsWeek?
 
     var competition: Competition? { competitions.first }
     var homeTeam: Competitor? { competition?.competitors.first(where: { $0.homeAway == "home" }) }
@@ -76,10 +87,23 @@ struct SportsEvent: Decodable, Identifiable {
     }
 }
 
+struct SportsSeason: Decodable {
+    let year: Int?
+    let type: Int?
+    let slug: String?
+}
+
+struct SportsWeek: Decodable {
+    let number: Int?
+}
+
 struct Competition: Decodable {
+    let id: String?
     let competitors: [Competitor]
     let venue: SportsVenue?
     let broadcasts: [SportsBroadcast]?
+    let attendance: Int?
+    let neutralSite: Bool?
 }
 
 struct SportsVenue: Decodable {
@@ -103,8 +127,17 @@ struct Competitor: Decodable, Identifiable {
     let winner: Bool?
     let team: SportsTeam
     let records: [TeamRecord]?
+    let linescores: [SportsLineScore]?
 
     var record: String? { records?.first?.summary }
+}
+
+struct SportsLineScore: Decodable, Identifiable {
+    let value: Double?
+    let displayValue: String?
+    let period: Int?
+
+    var id: String { "\(period ?? 0)-\(displayValue ?? "")" }
 }
 
 struct SportsTeam: Decodable {
@@ -112,6 +145,11 @@ struct SportsTeam: Decodable {
     let displayName: String
     let abbreviation: String
     let logo: String?
+    let location: String?
+    let name: String?
+    let shortDisplayName: String?
+    let color: String?
+    let alternateColor: String?
 }
 
 struct TeamRecord: Decodable {
@@ -126,6 +164,130 @@ struct EventStatusType: Decodable {
     let state: String?
     let description: String?
     let shortDetail: String?
+}
+
+struct SportsKeyValue: Identifiable, Hashable {
+    let id = UUID()
+    let label: String
+    let value: String
+}
+
+struct LeagueTeam: Identifiable, Hashable {
+    let id: String
+    let displayName: String
+    let abbreviation: String
+    let logo: String?
+    let location: String?
+    let color: String?
+    let alternateColor: String?
+}
+
+struct StandingGroup: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let rows: [StandingRow]
+}
+
+struct StandingRow: Identifiable, Hashable {
+    let id: String
+    let teamID: String
+    let teamName: String
+    let abbreviation: String
+    let logo: String?
+    let record: String
+    let rank: String?
+    let streak: String?
+    let gamesBehind: String?
+    let extra: [SportsKeyValue]
+}
+
+struct GameDetailData {
+    let teamStats: [GameTeamStats]
+    let playerGroups: [GamePlayerGroup]
+    let scoringPlays: [GameScoringPlay]
+    let facts: [SportsKeyValue]
+}
+
+struct GameTeamStats: Identifiable {
+    let id: String
+    let teamID: String
+    let teamName: String
+    let abbreviation: String
+    let logo: String?
+    let stats: [SportsKeyValue]
+}
+
+struct GamePlayerGroup: Identifiable {
+    let id: String
+    let teamID: String
+    let teamName: String
+    let category: String
+    let labels: [String]
+    let players: [GamePlayerStat]
+}
+
+struct GamePlayerStat: Identifiable {
+    let id: String
+    let athlete: SportsAthlete
+    let stats: [String]
+}
+
+struct GameScoringPlay: Identifiable {
+    let id: String
+    let text: String
+    let clock: String?
+    let period: Int?
+    let awayScore: String?
+    let homeScore: String?
+    let teamLogo: String?
+}
+
+struct SportsAthlete: Identifiable, Hashable {
+    let id: String
+    let displayName: String
+    let shortName: String?
+    let jersey: String?
+    let position: String?
+    let headshot: String?
+    let age: Int?
+    let height: String?
+    let weight: String?
+    let experience: String?
+    let status: String?
+}
+
+struct TeamProfileData {
+    let team: LeagueTeam
+    let nickname: String?
+    let standingSummary: String?
+    let record: String?
+    let venue: String?
+    let coach: String?
+    let facts: [SportsKeyValue]
+    let roster: [RosterGroup]
+}
+
+struct RosterGroup: Identifiable {
+    let id: String
+    let name: String
+    let athletes: [SportsAthlete]
+}
+
+struct PlayerProfileData {
+    let athlete: SportsAthlete
+    let teamName: String?
+    let debutYear: Int?
+    let birthplace: String?
+    let summaryStats: [SportsKeyValue]
+    let gameLog: [PlayerGameLogRow]
+}
+
+struct PlayerGameLogRow: Identifiable {
+    let id: String
+    let date: String
+    let opponent: String
+    let result: String?
+    let stats: [SportsKeyValue]
 }
 
 private enum SportsDateParser {
