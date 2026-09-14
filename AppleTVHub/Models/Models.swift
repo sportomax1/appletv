@@ -27,6 +27,13 @@ enum SportsLeague: String, CaseIterable, Identifiable, Hashable {
         case .mlb: return "baseball.fill"
         }
     }
+
+    var favoriteTeamAbbreviations: Set<String> {
+        switch self {
+        case .nfl, .nba: return ["DEN"]
+        case .nhl, .mlb: return ["COL"]
+        }
+    }
 }
 
 struct ESPNScoreboardResponse: Decodable {
@@ -46,14 +53,47 @@ struct SportsEvent: Decodable, Identifiable {
     var awayTeam: Competitor? { competition?.competitors.first(where: { $0.homeAway == "away" }) }
     var isLive: Bool { status.type.state == "in" }
     var isFinal: Bool { status.type.state == "post" }
+    var isUpcoming: Bool { !isLive && !isFinal }
 
     var startDate: Date? {
         SportsDateParser.date(from: date)
+    }
+
+    var network: String? {
+        competition?.broadcasts?
+            .flatMap { $0.names ?? [] }
+            .first
+    }
+
+    var venueText: String? {
+        guard let venue = competition?.venue else { return nil }
+        let location = [venue.address?.city, venue.address?.state]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+            .joined(separator: ", ")
+        if location.isEmpty { return venue.fullName }
+        return "\(venue.fullName) · \(location)"
     }
 }
 
 struct Competition: Decodable {
     let competitors: [Competitor]
+    let venue: SportsVenue?
+    let broadcasts: [SportsBroadcast]?
+}
+
+struct SportsVenue: Decodable {
+    let fullName: String
+    let address: SportsAddress?
+}
+
+struct SportsAddress: Decodable {
+    let city: String?
+    let state: String?
+}
+
+struct SportsBroadcast: Decodable {
+    let names: [String]?
 }
 
 struct Competitor: Decodable, Identifiable {
@@ -119,7 +159,9 @@ struct WeatherLocation: Identifiable, Hashable {
         .init(id: "parker", name: "Parker", subtitle: "Colorado", latitude: 39.5186, longitude: -104.7614),
         .init(id: "denver", name: "Denver", subtitle: "Colorado", latitude: 39.7392, longitude: -104.9903),
         .init(id: "colorado-springs", name: "Colorado Springs", subtitle: "Colorado", latitude: 38.8339, longitude: -104.8214),
-        .init(id: "fort-collins", name: "Fort Collins", subtitle: "Colorado", latitude: 40.5853, longitude: -105.0844)
+        .init(id: "fort-collins", name: "Fort Collins", subtitle: "Colorado", latitude: 40.5853, longitude: -105.0844),
+        .init(id: "boulder", name: "Boulder", subtitle: "Colorado", latitude: 40.0150, longitude: -105.2705),
+        .init(id: "park-city", name: "Park City", subtitle: "Utah", latitude: 40.6461, longitude: -111.4980)
     ]
 
     static func savedOrDefault() -> WeatherLocation {
@@ -141,6 +183,9 @@ struct WeatherCurrent: Decodable {
     let relativeHumidity2m: Int
     let weatherCode: Int
     let windSpeed10m: Double
+    let windGusts10m: Double?
+    let precipitation: Double?
+    let cloudCover: Int?
 
     enum CodingKeys: String, CodingKey {
         case temperature2m = "temperature_2m"
@@ -148,6 +193,9 @@ struct WeatherCurrent: Decodable {
         case relativeHumidity2m = "relative_humidity_2m"
         case weatherCode = "weather_code"
         case windSpeed10m = "wind_speed_10m"
+        case windGusts10m = "wind_gusts_10m"
+        case precipitation
+        case cloudCover = "cloud_cover"
     }
 }
 
@@ -156,12 +204,14 @@ struct WeatherHourly: Decodable {
     let temperature2m: [Double]
     let precipitationProbability: [Int]
     let weatherCode: [Int]
+    let windSpeed10m: [Double]?
 
     enum CodingKeys: String, CodingKey {
         case time
         case temperature2m = "temperature_2m"
         case precipitationProbability = "precipitation_probability"
         case weatherCode = "weather_code"
+        case windSpeed10m = "wind_speed_10m"
     }
 }
 
@@ -171,6 +221,11 @@ struct WeatherDaily: Decodable {
     let temperature2mMax: [Double]
     let temperature2mMin: [Double]
     let precipitationProbabilityMax: [Int]
+    let precipitationSum: [Double]?
+    let windSpeed10mMax: [Double]?
+    let uvIndexMax: [Double]?
+    let sunrise: [String]?
+    let sunset: [String]?
 
     enum CodingKeys: String, CodingKey {
         case time
@@ -178,6 +233,11 @@ struct WeatherDaily: Decodable {
         case temperature2mMax = "temperature_2m_max"
         case temperature2mMin = "temperature_2m_min"
         case precipitationProbabilityMax = "precipitation_probability_max"
+        case precipitationSum = "precipitation_sum"
+        case windSpeed10mMax = "wind_speed_10m_max"
+        case uvIndexMax = "uv_index_max"
+        case sunrise
+        case sunset
     }
 }
 
