@@ -6,17 +6,24 @@ struct WeatherView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel = WeatherViewModel()
 
+    private let metricColumns = [
+        GridItem(.flexible(), spacing: 16),
+        GridItem(.flexible(), spacing: 16),
+        GridItem(.flexible(), spacing: 16),
+        GridItem(.flexible(), spacing: 16)
+    ]
+
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [Color(red: 0.03, green: 0.10, blue: 0.20), Color(red: 0.11, green: 0.24, blue: 0.38)],
+                colors: [Color(red: 0.02, green: 0.08, blue: 0.18), Color(red: 0.07, green: 0.20, blue: 0.34), Color(red: 0.12, green: 0.30, blue: 0.46)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
             .ignoresSafeArea()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 30) {
+                VStack(alignment: .leading, spacing: 26) {
                     header
                     locationPicker
 
@@ -25,28 +32,22 @@ struct WeatherView: View {
                     }
 
                     if viewModel.isLoading && viewModel.weather == nil {
-                        HStack(spacing: 18) {
-                            ProgressView()
-                            Text("Loading weather…")
-                                .font(.title2)
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 360)
+                        loadingState
                     } else if let weather = viewModel.weather {
-                        currentConditions(weather)
+                        currentHero(weather)
+                        todayMetrics(weather)
                         hourlyForecast(weather)
                         dailyForecast(weather)
                     } else {
                         errorState
                     }
                 }
-                .padding(.horizontal, 70)
-                .padding(.vertical, 45)
+                .padding(.horizontal, 64)
+                .padding(.vertical, 38)
             }
         }
         .task(id: refreshTaskID) {
             guard scenePhase == .active, isActive else { return }
-
-            // Entering Weather immediately refreshes only when the stored forecast is stale.
             await viewModel.refresh(force: viewModel.weather == nil)
 
             guard !Task.isCancelled, scenePhase == .active, isActive else { return }
@@ -59,21 +60,26 @@ struct WeatherView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
+        HStack(alignment: .center, spacing: 20) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("WEATHER")
-                    .font(.system(size: 54, weight: .black, design: .rounded))
-                Text("Current conditions and forecast")
+                HStack(spacing: 14) {
+                    Image(systemName: "cloud.sun.fill")
+                        .symbolRenderingMode(.multicolor)
+                        .font(.system(size: 36))
+                    Text("WEATHER CENTER")
+                        .font(.system(size: 50, weight: .black, design: .rounded))
+                }
+                Text("Current conditions, hourly detail and a full 7-day outlook")
                     .font(.title3)
                     .foregroundStyle(.secondary)
             }
 
             Spacer()
 
-            VStack(alignment: .trailing, spacing: 3) {
+            VStack(alignment: .trailing, spacing: 4) {
                 Text(viewModel.errorMessage == nil ? "Auto refresh · ~15 min" : "Retrying · ~2 min")
                     .font(.caption.bold())
-                    .foregroundStyle(viewModel.errorMessage == nil ? Color.gray : Color.orange)
+                    .foregroundStyle(viewModel.errorMessage == nil ? Color.secondary : Color.orange)
                 if let updated = viewModel.lastUpdated {
                     Text("Updated \(updated.formatted(date: .omitted, time: .shortened))")
                         .font(.caption)
@@ -98,112 +104,182 @@ struct WeatherView: View {
     }
 
     private var locationPicker: some View {
-        HStack(spacing: 16) {
-            ForEach(WeatherLocation.presets) { location in
-                Button {
-                    Task { await viewModel.select(location) }
-                } label: {
-                    VStack(spacing: 2) {
-                        Text(location.name).fontWeight(.bold)
-                        Text(location.subtitle).font(.caption)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 14) {
+                ForEach(WeatherLocation.presets) { location in
+                    Button {
+                        Task { await viewModel.select(location) }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(location.name).fontWeight(.bold())
+                            Text(location.subtitle)
+                                .font(.caption)
+                                .foregroundStyle(viewModel.location == location ? Color.black.opacity(0.65) : Color.secondary)
+                        }
+                        .frame(minWidth: 190, alignment: .leading)
+                        .padding(.vertical, 4)
                     }
-                    .frame(minWidth: 210)
+                    .buttonStyle(.borderedProminent)
+                    .tint(viewModel.location == location ? .white : .gray.opacity(0.28))
+                    .foregroundStyle(viewModel.location == location ? .black : .white)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(viewModel.location == location ? .white : .gray.opacity(0.35))
-                .foregroundStyle(viewModel.location == location ? .black : .white)
             }
+            .padding(.vertical, 8)
         }
     }
 
-    private func currentConditions(_ weather: OpenMeteoResponse) -> some View {
-        HStack(spacing: 38) {
-            Image(systemName: WeatherCode.symbol(weather.current.weatherCode))
-                .symbolRenderingMode(.multicolor)
-                .font(.system(size: 108))
-                .frame(width: 150)
+    private var loadingState: some View {
+        HStack(spacing: 18) {
+            ProgressView()
+            Text("Loading weather…")
+                .font(.title2)
+        }
+        .frame(maxWidth: .infinity, minHeight: 360)
+    }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text(viewModel.location.name)
-                    .font(.title2.bold())
-                Text("\(Int(weather.current.temperature2m.rounded()))°")
-                    .font(.system(size: 92, weight: .black, design: .rounded))
+    private func currentHero(_ weather: OpenMeteoResponse) -> some View {
+        HStack(spacing: 34) {
+            VStack(spacing: 12) {
+                Image(systemName: WeatherCode.symbol(weather.current.weatherCode))
+                    .symbolRenderingMode(.multicolor)
+                    .font(.system(size: 112))
+                    .frame(width: 150, height: 130)
                 Text(WeatherCode.description(weather.current.weatherCode))
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(viewModel.location.name)
+                    .font(.title.bold())
+                Text("\(Int(weather.current.temperature2m.rounded()))°")
+                    .font(.system(size: 104, weight: .black, design: .rounded))
+                    .contentTransition(.numericText())
+                Text("Feels like \(Int(weather.current.apparentTemperature.rounded()))°")
                     .font(.title2)
                     .foregroundStyle(.secondary)
             }
 
             Spacer()
 
-            metric(title: "Feels Like", value: "\(Int(weather.current.apparentTemperature.rounded()))°", symbol: "thermometer.medium")
-            metric(title: "Humidity", value: "\(weather.current.relativeHumidity2m)%", symbol: "humidity.fill")
-            metric(title: "Wind", value: "\(Int(weather.current.windSpeed10m.rounded())) mph", symbol: "wind")
+            VStack(alignment: .leading, spacing: 16) {
+                Text("TODAY")
+                    .font(.caption.bold())
+                    .foregroundStyle(.secondary)
+
+                if let high = weather.daily.temperature2mMax.first,
+                   let low = weather.daily.temperature2mMin.first {
+                    HStack(spacing: 26) {
+                        Label("\(Int(high.rounded()))° high", systemImage: "arrow.up")
+                        Label("\(Int(low.rounded()))° low", systemImage: "arrow.down")
+                    }
+                    .font(.title3.bold())
+                }
+
+                if let sunrise = weather.daily.sunrise?.first,
+                   let sunset = weather.daily.sunset?.first {
+                    HStack(spacing: 24) {
+                        Label(timeLabel(sunrise, weather: weather), systemImage: "sunrise.fill")
+                        Label(timeLabel(sunset, weather: weather), systemImage: "sunset.fill")
+                    }
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(24)
+            .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 22))
         }
-        .padding(34)
+        .padding(32)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+        }
     }
 
-    private func metric(title: String, value: String, symbol: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: symbol)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.title.bold())
+    private func todayMetrics(_ weather: OpenMeteoResponse) -> some View {
+        LazyVGrid(columns: metricColumns, spacing: 16) {
+            metricCard(title: "Humidity", value: "\(weather.current.relativeHumidity2m)%", symbol: "humidity.fill")
+            metricCard(title: "Wind", value: "\(Int(weather.current.windSpeed10m.rounded())) mph", symbol: "wind")
+            metricCard(title: "Gusts", value: "\(Int((weather.current.windGusts10m ?? 0).rounded())) mph", symbol: "tornado")
+            metricCard(title: "Cloud Cover", value: "\(weather.current.cloudCover ?? 0)%", symbol: "cloud.fill")
+
+            metricCard(title: "Precip Now", value: String(format: "%.2f in", weather.current.precipitation ?? 0), symbol: "drop.fill")
+            metricCard(title: "Rain Chance", value: "\(weather.daily.precipitationProbabilityMax.first ?? 0)%", symbol: "umbrella.fill")
+            metricCard(title: "UV Index", value: String(format: "%.1f", weather.daily.uvIndexMax?.first ?? 0), symbol: "sun.max.fill")
+            metricCard(title: "Max Wind", value: "\(Int((weather.daily.windSpeed10mMax?.first ?? 0).rounded())) mph", symbol: "wind.circle.fill")
         }
-        .frame(minWidth: 180, alignment: .leading)
+    }
+
+    private func metricCard(title: String, value: String, symbol: String) -> some View {
+        HStack(spacing: 16) {
+            Image(systemName: symbol)
+                .symbolRenderingMode(.hierarchical)
+                .font(.system(size: 28, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.title3.bold())
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(18)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private func hourlyForecast(_ weather: OpenMeteoResponse) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Next 12 Hours")
-                .font(.title2.bold())
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("NEXT 12 HOURS")
+                    .font(.title2.bold())
+                Spacer()
+                Text("Focus a card and swipe to move through the timeline")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 16) {
+                HStack(spacing: 14) {
                     ForEach(hourlyIndices(weather), id: \.self) { index in
                         HourlyForecastCard(
                             time: hourLabel(weather.hourly.time[index], weather: weather),
                             temperature: Int(weather.hourly.temperature2m[index].rounded()),
                             precipitation: weather.hourly.precipitationProbability[index],
-                            weatherCode: weather.hourly.weatherCode[index]
+                            weatherCode: weather.hourly.weatherCode[index],
+                            wind: hourlyWind(weather, index: index)
                         )
                     }
                 }
-                .padding(.vertical, 14)
+                .padding(.vertical, 16)
             }
         }
     }
 
     private func dailyForecast(_ weather: OpenMeteoResponse) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("7-Day Forecast")
+        VStack(alignment: .leading, spacing: 14) {
+            Text("7-DAY OUTLOOK")
                 .font(.title2.bold())
 
-            HStack(spacing: 16) {
+            HStack(spacing: 14) {
                 ForEach(Array(0..<dailyCount(weather)), id: \.self) { index in
-                    VStack(spacing: 12) {
-                        Text(dayLabel(weather.daily.time[index], weather: weather))
-                            .font(.headline)
-                        Image(systemName: WeatherCode.symbol(weather.daily.weatherCode[index]))
-                            .symbolRenderingMode(.multicolor)
-                            .font(.system(size: 40))
-                        HStack(spacing: 8) {
-                            Text("\(Int(weather.daily.temperature2mMax[index].rounded()))°")
-                                .fontWeight(.bold)
-                            Text("\(Int(weather.daily.temperature2mMin[index].rounded()))°")
-                                .foregroundStyle(.secondary)
-                        }
-                        Label("\(weather.daily.precipitationProbabilityMax[index])%", systemImage: "drop.fill")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 22)
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    DailyForecastCard(
+                        day: dayLabel(weather.daily.time[index], weather: weather),
+                        weatherCode: weather.daily.weatherCode[index],
+                        high: Int(weather.daily.temperature2mMax[index].rounded()),
+                        low: Int(weather.daily.temperature2mMin[index].rounded()),
+                        precipitation: weather.daily.precipitationProbabilityMax[index],
+                        wind: dailyValue(weather.daily.windSpeed10mMax, index: index).map { Int($0.rounded()) }
+                    )
                 }
             }
         }
-        .padding(.bottom, 45)
+        .padding(.bottom, 48)
     }
 
     private var errorState: some View {
@@ -267,6 +343,16 @@ struct WeatherView: View {
         )
     }
 
+    private func hourlyWind(_ weather: OpenMeteoResponse, index: Int) -> Int? {
+        guard let winds = weather.hourly.windSpeed10m, winds.indices.contains(index) else { return nil }
+        return Int(winds[index].rounded())
+    }
+
+    private func dailyValue(_ values: [Double]?, index: Int) -> Double? {
+        guard let values, values.indices.contains(index) else { return nil }
+        return values[index]
+    }
+
     private func hourLabel(_ isoLocal: String, weather: OpenMeteoResponse) -> String {
         let parser = localHourlyFormatter(for: weather)
         guard let date = parser.date(from: isoLocal) else { return isoLocal }
@@ -276,6 +362,10 @@ struct WeatherView: View {
         display.timeZone = TimeZone(identifier: weather.timezone) ?? .current
         display.dateFormat = "h a"
         return display.string(from: date)
+    }
+
+    private func timeLabel(_ isoLocal: String, weather: OpenMeteoResponse) -> String {
+        hourLabel(isoLocal, weather: weather)
     }
 
     private func dayLabel(_ dateString: String, weather: OpenMeteoResponse) -> String {
@@ -323,28 +413,34 @@ private struct HourlyForecastCard: View {
     let temperature: Int
     let precipitation: Int
     let weatherCode: Int
+    let wind: Int?
 
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 10) {
             Text(time)
                 .font(.headline)
             Image(systemName: WeatherCode.symbol(weatherCode))
                 .symbolRenderingMode(.multicolor)
-                .font(.system(size: 42))
+                .font(.system(size: 40))
             Text("\(temperature)°")
                 .font(.title2.bold())
-            Label("\(precipitation)%", systemImage: "drop.fill")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Label("\(precipitation)%", systemImage: "drop.fill")
+                if let wind {
+                    Label("\(wind)", systemImage: "wind")
+                }
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
         }
-        .padding(20)
-        .frame(width: 150, height: 190)
+        .padding(18)
+        .frame(width: 152, height: 188)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(Color.white.opacity(isFocused ? 0.50 : 0.08), lineWidth: isFocused ? 3 : 1)
+                .strokeBorder(Color.white.opacity(isFocused ? 0.55 : 0.08), lineWidth: isFocused ? 3 : 1)
         }
         .scaleEffect(isFocused ? 1.06 : 1)
         .animation(.easeOut(duration: 0.12), value: isFocused)
@@ -352,5 +448,51 @@ private struct HourlyForecastCard: View {
         .focused($isFocused)
         .zIndex(isFocused ? 1 : 0)
         .accessibilityLabel("\(time), \(temperature) degrees, \(WeatherCode.description(weatherCode)), \(precipitation) percent precipitation")
+    }
+}
+
+private struct DailyForecastCard: View {
+    let day: String
+    let weatherCode: Int
+    let high: Int
+    let low: Int
+    let precipitation: Int
+    let wind: Int?
+
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Text(day)
+                .font(.headline)
+            Image(systemName: WeatherCode.symbol(weatherCode))
+                .symbolRenderingMode(.multicolor)
+                .font(.system(size: 38))
+            HStack(spacing: 8) {
+                Text("\(high)°")
+                    .fontWeight(.bold)
+                Text("\(low)°")
+                    .foregroundStyle(.secondary)
+            }
+            Label("\(precipitation)%", systemImage: "drop.fill")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if let wind {
+                Label("\(wind) mph", systemImage: "wind")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 205)
+        .padding(.vertical, 18)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(Color.white.opacity(isFocused ? 0.50 : 0.07), lineWidth: isFocused ? 3 : 1)
+        }
+        .scaleEffect(isFocused ? 1.035 : 1)
+        .animation(.easeOut(duration: 0.12), value: isFocused)
+        .focusable()
+        .focused($isFocused)
     }
 }
